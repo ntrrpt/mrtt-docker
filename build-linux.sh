@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+RUN_CHECKS="${RUN_CHECKS-""}"
+DIAGNOSTICS="${DIAGNOSTICS-0}"
+
+ARCH="$(uname -m)"
+case "$ARCH" in
+    x86_64)
+        RUST_TARGET=x86_64-unknown-linux-musl
+        ZIG_TARGET=x86_64-linux-musl
+        ASSET=mrtt-linux-amd64
+        ;;
+    armv7)
+        RUST_TARGET=armv7-unknown-linux-musleabihf
+        ZIG_TARGET=arm-linux-musleabihf
+        ASSET=mrtt-linux-armv7
+        ;;
+    aarch64)
+        RUST_TARGET=aarch64-unknown-linux-musl
+        ZIG_TARGET=aarch64-linux-musl
+        ASSET=mrtt-linux-arm64
+        ;;
+    *)
+        echo "Unsupported architecture: $ARCH" >&2
+        exit 1
+        ;;
+esac
+
+while (($#)); do
+  case "$1" in
+    --tests) RUN_CHECKS=1 ;;
+    --no-tests) RUN_CHECKS=0 ;;
+    --diagnostics) DIAGNOSTICS=1 ;;
+    *) echo "Usage: $0 [--tests|--no-tests] [--diagnostics]" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [[ -z "$RUN_CHECKS" ]]; then
+  if [[ -t 0 ]]; then
+    read -rp "Запустить проверки и тесты (или их кросс-компиляцию) перед сборкой? [Y/n]: " REPLY
+    case "$REPLY" in
+      [nN]|[nN][oO]|[нН]|[нН][eE][тТ]) RUN_CHECKS=0 ;;
+      *) RUN_CHECKS=1 ;;
+    esac
+  else
+    RUN_CHECKS=1
+  fi
+fi
+
+FEATURE_ARGS=()
+if [[ "$DIAGNOSTICS" == 1 ]]; then
+  FEATURE_ARGS=(--features diagnostics)
+fi
+
+command -v cargo >/dev/null
+command -v rustup >/dev/null
+command -v zig >/dev/null
+cargo zigbuild --help >/dev/null
+# rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+rustup target add $RUST_TARGET --toolchain 1.97.1
+rustc +1.97.1 --version
+zig version
+
+WRAP="$ROOT/build/zig-wrappers"
+mkdir -p "$WRAP"
+
+cat > "$WRAP/zigcc" <<'SH'
+#!/usr/bin/env bash
+args=()
+for arg in "$@"; do
+    [[ "$arg" == --target=* ]] || args+=("$arg")
+done
+exec zig cc -target "$MRTT_ZIG_TARGET" "${args[@]}"
+SH
+
+cat > "$WRAP/zigcxx" <<'SH'
+#!/usr/bin/env bash
+args=()
+for arg in "$@"; do
+    [[ "$arg" == --target=* ]] || args+=("$arg")
+done
+exec zig c++ -target "$MRTT_ZIG_TARGET" "${args[@]}"
+SH
+
+cat > "$WRAP/zigar" <<'SH'
+#!/usr/bin/env bash
+exec zig ar "$@"
+SH
+
+chmod +x "$WRAP/zigcc" "$WRAP/zigcxx" "$WRAP/zigar"
+CC_WRAPPER="$WRAP/zigcc"
+CXX_WRAPPER="$WRAP/zigcxx"
+AR_WRAPPER="$WRAP/zigar"
+
+export MRTT_ZIG_TARGET="$ZIG_TARGET"
+export "CC_${RUST_TARGET//-/_}=$WRAP/zigcc"
+export "CXX_${RUST_TARGET//-/_}=$WRAP/zigcxx"
+export "AR_${RUST_TARGET//-/_}=$WRAP/zigar"
+export "CARGO_TARGET_${RUST_TARGET//-/_}_LINKER=$WRAP/zigcc"
+
+export CC_x86_64_unknown_linux_musl="$CC_WRAPPER"
+export CXX_x86_64_unknown_linux_musl="$CXX_WRAPPER"
+export AR_x86_64_unknown_linux_musl="$AR_WRAPPER"
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$CC_WRAPPER"
+export CC_aarch64_unknown_linux_musl="$CC_WRAPPER"
+export CXX_aarch64_unknown_linux_musl="$CXX_WRAPPER"
+export AR_aarch64_unknown_linux_musl="$AR_WRAPPER"
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$CC_WRAPPER"
+export CC_armv7_unknown_linux_musleabihf="$CC_WRAPPER"
+export CXX_armv7_unknown_linux_musleabihf="$CXX_WRAPPER"
+export AR_armv7_unknown_linux_musleabihf="$AR_WRAPPER"
+export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER="$CC_WRAPPER"
+export MRTT_ZIG_TARGET=x86_64-linux-musl
+
+if [[ "$RUN_CHECKS" == 1 ]]; then
+  cargo +1.97.1 fmt --all -- --check
+  cargo +1.97.1 zigbuild --all-targets --target x86_64-unknown-linux-musl "${FEATURE_ARGS[@]}"
+  CARGO_TARGET_DIR="$ROOT/build/linux-musl-check" cargo +1.97.1 clippy --release --target x86_64-unknown-linux-musl "${FEATURE_ARGS[@]}" --all-targets -- -D warnings
+  if [[ "$HOST" == *linux* ]]; then
+    echo "Running Linux musl tests..."
+    CARGO_TARGET_DIR="$ROOT/build/linux-musl-tests" cargo +1.97.1 test --target x86_64-unknown-linux-musl "${FEATURE_ARGS[@]}" --all-targets
+  else
+    echo "Compiling Linux musl test binaries (they cannot run on this non-Linux host)..."
+    CARGO_TARGET_DIR="$ROOT/build/linux-musl-tests" cargo +1.97.1 zigbuild --target x86_64-unknown-linux-musl "${FEATURE_ARGS[@]}" --tests
+  fi
+fi
+
+build_variant() {
+  local target="$1" zig_target="$2" asset="$3"
+  MRTT_ZIG_TARGET="$zig_target" \
+    ZIG_GLOBAL_CACHE_DIR="$ROOT/build/zig-cache/$asset/global" \
+    ZIG_LOCAL_CACHE_DIR="$ROOT/build/zig-cache/$asset/local" \
+    CARGO_TARGET_DIR="$ROOT/build/linux-musl" \
+    cargo +1.97.1 zigbuild --release --target "$target" "${FEATURE_ARGS[@]}"
+  mkdir -p "$ROOT/dist" "$ROOT/../app/src/main/assets"
+  cp "$ROOT/build/linux-musl/$target/release/mrtt" "$ROOT/dist/$asset"
+  cp "$ROOT/build/linux-musl/$target/release/mrtt" "$ROOT/../app/src/main/assets/$asset"
+  ls -lh "$ROOT/dist/$asset"
+}
+
+build_variant $RUST_TARGET $ZIG_TARGET $ASSET
+
+rm -f "$ROOT/../app/src/main/assets/mrtt"
+
+# if command -v pwsh >/dev/null; then
+#   pwsh -NoProfile -File "$ROOT/../scripts/server_asset_provenance.ps1" -Mode Write
+#   pwsh -NoProfile -File "$ROOT/../scripts/server_asset_provenance.ps1" -Mode Verify
+# else
+#   echo "Server assets built. Run scripts/server_asset_provenance.ps1 -Mode Write and -Mode Verify before packaging an APK." >&2
+#   exit 1
+# fi
+
+ln -s "$ROOT/dist/$ASSET" /src/mrtt
