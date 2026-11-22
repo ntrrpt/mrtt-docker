@@ -5,8 +5,7 @@ ENV MRTT_SERVICE_MANAGER=docker \
     RUSTUP_HOME=/root/.rustup \
     PATH=/root/.cargo/bin:/opt/zig:$PATH
 
-# --no-cache
-RUN apk add --progress \
+RUN apk add --no-cache --progress \
     bash \
     build-base \
     ca-certificates \
