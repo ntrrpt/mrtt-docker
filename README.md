@@ -1,6 +1,7 @@
 ## via docker compose:
 
 ```yaml
+services:
   mrtt:
     container_name: mrtt
     image: mrtt:custom
