@@ -9,6 +9,7 @@
       args:
         WEB_PANEL_ANY_ADDR: 1
     ports:
+      - "46000:46000/tcp"
       - "46000:46000/udp"
     cap_drop:
       - ALL
