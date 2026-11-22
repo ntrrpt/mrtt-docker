@@ -33,7 +33,7 @@ RUN if [ -n "${GIT_TAG:-}" ]; then \
         git checkout tags/${GIT_TAG}; \
     fi
 
-ARG WEB_PANEL_ANY_ADDR=0
+ARG WEB_PANEL_ANY_ADDR
 RUN if [ -n "${WEB_PANEL_ANY_ADDR:-}" ]; then \
         sed -i 's/\[127, 0, 0, 1\]/[0, 0, 0, 0]/g' /src/rust-server/web_panel.rs; \
     fi

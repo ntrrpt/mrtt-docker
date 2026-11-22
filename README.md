@@ -7,8 +7,8 @@ services:
     image: mrtt:custom
     build:
       context: https://github.com/ntrrpt/mrtt-docker.git
-      args:
-        WEB_PANEL_ANY_ADDR: 1
+      # args:
+      #   WEB_PANEL_ANY_ADDR: 1
     ports:
       - "46000:46000/tcp"
       - "46000:46000/udp"
@@ -41,7 +41,7 @@ services:
       net.ipv4.tcp_window_scaling: "1"
       net.ipv4.tcp_fastopen: "3"
       net.ipv4.tcp_slow_start_after_idle: "0"
-#      net.core.default_qdisc: "fq"
+      # net.core.default_qdisc: "fq"
     restart: unless-stopped
     stop_grace_period: 5s
     command:
